@@ -1,0 +1,797 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1.0, user-scalable=no"
+        />
+        <title>Nokia 2310 Bounce</title>
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+
+            body {
+                background: #1a1a1a;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+                overflow: hidden;
+                font-family: "Courier New", monospace;
+                touch-action: none;
+                user-select: none;
+                -webkit-user-select: none;
+            }
+
+            .phone-frame {
+                background: #2d2d2d;
+                border-radius: 24px;
+                padding: 12px;
+                box-shadow:
+                    0 0 0 4px #1a1a1a,
+                    0 0 0 8px #333,
+                    0 0 30px rgba(0, 0, 0, 0.6);
+                position: relative;
+            }
+
+            /* Top speaker bar */
+            .phone-frame::before {
+                content: "";
+                position: absolute;
+                top: 20px;
+                left: 50%;
+                transform: translateX(-50%);
+                width: 40px;
+                height: 4px;
+                background: #555;
+                border-radius: 4px;
+                z-index: 10;
+            }
+
+            .screen {
+                background: #a8c64e;
+                background: linear-gradient(180deg, #b8d44e 0%, #96b03c 100%);
+                border-radius: 12px;
+                overflow: hidden;
+                position: relative;
+                width: 320px;
+                height: 400px;
+                border: 3px solid #1a1a1a;
+            }
+
+            canvas {
+                display: block;
+                width: 100%;
+                height: 100%;
+                image-rendering: pixelated;
+                image-rendering: crisp-edges;
+            }
+
+            .controls {
+                margin-top: 8px;
+                display: flex;
+                justify-content: space-between;
+                padding: 0 20px;
+                gap: 60px;
+            }
+
+            .btn {
+                width: 60px;
+                height: 60px;
+                border-radius: 50%;
+                background: #3a3a3a;
+                border: 3px solid #555;
+                color: #aaa;
+                font-size: 24px;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: all 0.1s;
+                -webkit-tap-highlight-color: transparent;
+                touch-action: manipulation;
+            }
+
+            .btn:active {
+                background: #555;
+                border-color: #888;
+                transform: scale(0.92);
+            }
+
+            .btn-center {
+                width: 50px;
+                height: 50px;
+                border-radius: 50%;
+                background: #3a3a3a;
+                border: 3px solid #555;
+                color: #aaa;
+                font-size: 20px;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: all 0.1s;
+                -webkit-tap-highlight-color: transparent;
+                touch-action: manipulation;
+            }
+
+            .btn-center:active {
+                background: #c0392b;
+                border-color: #e74c3c;
+                transform: scale(0.92);
+            }
+
+            .info-bar {
+                display: flex;
+                justify-content: space-between;
+                padding: 4px 12px;
+                color: #1a1a1a;
+                font-size: 11px;
+                font-family: "Courier New", monospace;
+                position: absolute;
+                top: 2px;
+                left: 0;
+                right: 0;
+                z-index: 5;
+                pointer-events: none;
+            }
+
+            .info-bar span {
+                background: rgba(168, 198, 78, 0.8);
+                padding: 2px 6px;
+                border-radius: 3px;
+            }
+
+            @media (max-width: 400px) {
+                .phone-frame {
+                    padding: 8px;
+                    border-radius: 16px;
+                }
+                .screen {
+                    width: 280px;
+                    height: 350px;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <div class="phone-frame">
+            <div class="screen">
+                <canvas id="game"></canvas>
+            </div>
+            <div class="controls">
+                <button class="btn" id="btn-left" title="Move Left">◀</button>
+                <button class="btn-center" id="btn-center" title="Pause">
+                    ■
+                </button>
+                <button class="btn" id="btn-right" title="Move Right">▶</button>
+            </div>
+        </div>
+
+        <script>
+            (function () {
+                const canvas = document.getElementById("game");
+                const ctx = canvas.getContext("2d");
+
+                // Scale for crisp pixels
+                const SCALE = 2;
+                const W = 160;
+                const H = 200;
+                canvas.width = W * SCALE;
+                canvas.height = H * SCALE;
+                ctx.scale(SCALE, SCALE);
+
+                // --- Nokia green palette ---
+                const COLORS = {
+                    bg: "#a8c64e",
+                    dark: "#2d4a1e",
+                    mid: "#5a7d2c",
+                    light: "#c8e46c",
+                    accent: "#e8f48c",
+                    platform: "#4a6e1e",
+                    platformTop: "#7da040",
+                    ball: "#2d4a1e",
+                    ballHighlight: "#5a7d2c",
+                    ring: "#e8c840",
+                    text: "#2d4a1e",
+                    danger: "#8b2020",
+                };
+
+                // --- Game state ---
+                let gameState = "title"; // 'title', 'playing', 'paused', 'gameover', 'levelComplete'
+                let score = 0;
+                let lives = 3;
+                let level = 1;
+                let levelTransitionTimer = 0;
+                let shakeTimer = 0;
+
+                // --- Ball ---
+                const BALL_RADIUS = 7;
+                let ball = { x: W / 2, y: 30, vx: 0, vy: 0, onGround: false };
+
+                // --- Platforms ---
+                let platforms = [];
+                let rings = [];
+                let cameraY = 0;
+                let targetCameraY = 0;
+
+                // --- Constants ---
+                const GRAVITY = 0.35;
+                const BOUNCE_VELOCITY = -6.5;
+                const MAX_VX = 2.5;
+                const ACCEL = 0.4;
+                const FRICTION = 0.88;
+                const PLATFORM_WIDTH = 40;
+                const PLATFORM_HEIGHT = 6;
+                const RING_RADIUS = 6;
+                const MAX_FALL = 180; // How far ball can fall below camera before dying
+
+                // --- Input ---
+                const keys = {};
+                let leftPressed = false;
+                let rightPressed = false;
+
+                // Keyboard
+                window.addEventListener("keydown", (e) => {
+                    keys[e.key] = true;
+                    if (e.key === "ArrowLeft" || e.key === "a")
+                        leftPressed = true;
+                    if (e.key === "ArrowRight" || e.key === "d")
+                        rightPressed = true;
+                    if (e.key === " " || e.key === "Enter") {
+                        e.preventDefault();
+                        if (gameState === "title") startGame();
+                        else if (gameState === "gameover") resetGame();
+                        else if (gameState === "levelComplete") nextLevel();
+                        else togglePause();
+                    }
+                    if (e.key === "p" || e.key === "P") togglePause();
+                });
+
+                window.addEventListener("keyup", (e) => {
+                    keys[e.key] = false;
+                    if (e.key === "ArrowLeft" || e.key === "a")
+                        leftPressed = false;
+                    if (e.key === "ArrowRight" || e.key === "d")
+                        rightPressed = false;
+                });
+
+                // Touch buttons
+                const btnLeft = document.getElementById("btn-left");
+                const btnRight = document.getElementById("btn-right");
+                const btnCenter = document.getElementById("btn-center");
+
+                btnLeft.addEventListener("pointerdown", () => {
+                    leftPressed = true;
+                });
+                btnLeft.addEventListener("pointerup", () => {
+                    leftPressed = false;
+                });
+                btnLeft.addEventListener("pointerleave", () => {
+                    leftPressed = false;
+                });
+
+                btnRight.addEventListener("pointerdown", () => {
+                    rightPressed = true;
+                });
+                btnRight.addEventListener("pointerup", () => {
+                    rightPressed = false;
+                });
+                btnRight.addEventListener("pointerleave", () => {
+                    rightPressed = false;
+                });
+
+                btnCenter.addEventListener("pointerdown", () => {
+                    if (gameState === "title") startGame();
+                    else if (gameState === "gameover") resetGame();
+                    else if (gameState === "levelComplete") nextLevel();
+                    else togglePause();
+                });
+
+                // --- Functions ---
+                function togglePause() {
+                    if (gameState === "playing") gameState = "paused";
+                    else if (gameState === "paused") gameState = "playing";
+                }
+
+                function startGame() {
+                    score = 0;
+                    lives = 3;
+                    level = 1;
+                    initLevel();
+                    gameState = "playing";
+                }
+
+                function resetGame() {
+                    startGame();
+                }
+
+                function nextLevel() {
+                    level++;
+                    initLevel();
+                    gameState = "playing";
+                }
+
+                function initLevel() {
+                    ball = {
+                        x: W / 2,
+                        y: 160,
+                        vx: 0,
+                        vy: BOUNCE_VELOCITY,
+                        onGround: false,
+                    };
+                    cameraY = 0;
+                    targetCameraY = 0;
+                    platforms = [];
+                    rings = [];
+
+                    // Generate platforms from bottom to top
+                    const totalPlatforms = 20 + level * 5;
+                    let lastY = 180;
+                    let lastX = W / 2;
+
+                    for (let i = 0; i < totalPlatforms; i++) {
+                        const gap = 25 + Math.random() * 15; // vertical gap
+                        const y = lastY - gap;
+
+                        // Horizontal position with constraints
+                        let x;
+                        if (i === 0) {
+                            x = W / 2; // First platform centered under ball
+                        } else {
+                            const maxShift = 50 + level * 5;
+                            let minX = Math.max(
+                                PLATFORM_WIDTH / 2 + 5,
+                                lastX - maxShift,
+                            );
+                            let maxX = Math.min(
+                                W - PLATFORM_WIDTH / 2 - 5,
+                                lastX + maxShift,
+                            );
+                            if (minX > maxX) {
+                                minX = PLATFORM_WIDTH / 2 + 5;
+                                maxX = W - PLATFORM_WIDTH / 2 - 5;
+                            }
+                            x = minX + Math.random() * (maxX - minX);
+                        }
+
+                        // Vary platform width per level
+                        const width =
+                            PLATFORM_WIDTH - level * 2 + Math.random() * 8;
+                        const finalWidth = Math.max(
+                            18,
+                            Math.min(PLATFORM_WIDTH + 5, width),
+                        );
+
+                        platforms.push({ x, y, width: finalWidth });
+
+                        // Maybe add a ring above this platform
+                        if (Math.random() < 0.4 && i > 0) {
+                            const ringX =
+                                x + (Math.random() - 0.5) * finalWidth * 0.8;
+                            const ringY = y - 12 - Math.random() * 8;
+                            rings.push({
+                                x: ringX,
+                                y: ringY,
+                                collected: false,
+                            });
+                        }
+
+                        lastY = y;
+                        lastX = x;
+                    }
+
+                    // Sort platforms by y (ascending = bottom to top in screen space)
+                    platforms.sort((a, b) => a.y - b.y);
+                }
+
+                function update() {
+                    if (gameState === "levelComplete") {
+                        levelTransitionTimer--;
+                        if (levelTransitionTimer <= 0) nextLevel();
+                        return;
+                    }
+                    if (gameState !== "playing") return;
+
+                    // --- Input ---
+                    if (leftPressed) ball.vx -= ACCEL;
+                    if (rightPressed) ball.vx += ACCEL;
+
+                    // Clamp horizontal velocity
+                    ball.vx = Math.max(-MAX_VX, Math.min(MAX_VX, ball.vx));
+
+                    // Friction when no input
+                    if (!leftPressed && !rightPressed) {
+                        ball.vx *= FRICTION;
+                        if (Math.abs(ball.vx) < 0.05) ball.vx = 0;
+                    }
+
+                    // --- Physics ---
+                    ball.vy += GRAVITY;
+                    ball.x += ball.vx;
+                    ball.y += ball.vy;
+
+                    // Wrap horizontally
+                    if (ball.x < -BALL_RADIUS) ball.x = W + BALL_RADIUS;
+                    if (ball.x > W + BALL_RADIUS) ball.x = -BALL_RADIUS;
+
+                    // --- Platform collision ---
+                    ball.onGround = false;
+                    for (const plat of platforms) {
+                        const px = plat.x;
+                        const py = plat.y;
+                        const pw = plat.width;
+
+                        // Check if ball is within platform bounds and falling
+                        if (
+                            ball.vy > 0 &&
+                            ball.y + BALL_RADIUS >= py &&
+                            ball.y + BALL_RADIUS <= py + PLATFORM_HEIGHT + 4 &&
+                            ball.x + BALL_RADIUS > px - pw / 2 &&
+                            ball.x - BALL_RADIUS < px + pw / 2
+                        ) {
+                            ball.y = py - BALL_RADIUS;
+                            ball.vy = BOUNCE_VELOCITY;
+                            ball.onGround = true;
+                            break;
+                        }
+                    }
+
+                    // --- Ring collection ---
+                    for (const ring of rings) {
+                        if (!ring.collected) {
+                            const dx = ball.x - ring.x;
+                            const dy = ball.y - ring.y;
+                            const dist = Math.sqrt(dx * dx + dy * dy);
+                            if (dist < BALL_RADIUS + RING_RADIUS) {
+                                ring.collected = true;
+                                score += 100;
+                                // Spawn sparkle particles (just visual, add to score)
+                            }
+                        }
+                    }
+
+                    // --- Camera ---
+                    // Camera follows ball when it goes up
+                    const cameraThreshold = 60;
+                    if (ball.y < cameraY + cameraThreshold) {
+                        targetCameraY = ball.y - cameraThreshold;
+                    }
+                    // Smooth camera
+                    cameraY += (targetCameraY - cameraY) * 0.1;
+
+                    // --- Check fall off bottom ---
+                    if (ball.y > cameraY + H + MAX_FALL) {
+                        die();
+                    }
+
+                    // --- Check if level complete (ball above highest platform) ---
+                    const highestPlatformY = platforms.reduce(
+                        (min, p) => Math.min(min, p.y),
+                        Infinity,
+                    );
+                    if (ball.y < highestPlatformY - 50) {
+                        levelComplete();
+                    }
+                }
+
+                function die() {
+                    lives--;
+                    shakeTimer = 15;
+                    if (lives <= 0) {
+                        gameState = "gameover";
+                    } else {
+                        // Respawn at a safe position
+                        ball.x = W / 2;
+                        ball.y = cameraY + 100;
+                        ball.vx = 0;
+                        ball.vy = BOUNCE_VELOCITY;
+                        targetCameraY = ball.y - 60;
+                        cameraY = targetCameraY;
+                    }
+                }
+
+                function levelComplete() {
+                    gameState = "levelComplete";
+                    score += 500;
+                    levelTransitionTimer = 60;
+                }
+
+                // --- Rendering ---
+                function drawPixelText(
+                    text,
+                    x,
+                    y,
+                    size = 1,
+                    color = COLORS.text,
+                ) {
+                    ctx.fillStyle = color;
+                    ctx.font = `${size * 6}px "Courier New", monospace`;
+                    ctx.textAlign = "center";
+                    ctx.fillText(text, x, y);
+                }
+
+                function drawPlatform(x, y, width) {
+                    // Shadow
+                    ctx.fillStyle = COLORS.dark;
+                    ctx.fillRect(
+                        x - width / 2 + 1,
+                        y + 1,
+                        width,
+                        PLATFORM_HEIGHT,
+                    );
+
+                    // Body
+                    ctx.fillStyle = COLORS.platform;
+                    ctx.fillRect(x - width / 2, y, width, PLATFORM_HEIGHT);
+
+                    // Top highlight
+                    ctx.fillStyle = COLORS.platformTop;
+                    ctx.fillRect(x - width / 2, y, width, 2);
+
+                    // Pixel edges
+                    ctx.fillStyle = COLORS.dark;
+                    ctx.fillRect(x - width / 2, y, 1, PLATFORM_HEIGHT);
+                    ctx.fillRect(x + width / 2 - 1, y, 1, PLATFORM_HEIGHT);
+                }
+
+                function drawBall(x, y) {
+                    // Shadow
+                    ctx.fillStyle = COLORS.dark;
+                    ctx.beginPath();
+                    ctx.arc(x + 1, y + 1, BALL_RADIUS, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Main body
+                    const gradient = ctx.createRadialGradient(
+                        x - 2,
+                        y - 2,
+                        1,
+                        x,
+                        y,
+                        BALL_RADIUS,
+                    );
+                    gradient.addColorStop(0, COLORS.ballHighlight);
+                    gradient.addColorStop(0.5, COLORS.ball);
+                    gradient.addColorStop(1, COLORS.dark);
+                    ctx.fillStyle = gradient;
+                    ctx.beginPath();
+                    ctx.arc(x, y, BALL_RADIUS, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Outline
+                    ctx.strokeStyle = COLORS.dark;
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+
+                    // Face
+                    if (ball.onGround) {
+                        // Squished face
+                        ctx.fillStyle = COLORS.light;
+                        ctx.fillRect(x - 2, y - 1, 4, 1);
+                        ctx.fillRect(x - 3, y, 6, 1);
+                    } else if (ball.vy < -3) {
+                        // Stretched face (going up)
+                        ctx.fillStyle = COLORS.light;
+                        ctx.fillRect(x - 1, y - 3, 2, 3);
+                        ctx.fillRect(x - 2, y - 2, 4, 2);
+                    }
+                }
+
+                function drawRing(x, y) {
+                    // Outer
+                    ctx.strokeStyle = COLORS.ring;
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(x, y, RING_RADIUS, 0, Math.PI * 2);
+                    ctx.stroke();
+
+                    // Inner highlight
+                    ctx.strokeStyle = COLORS.accent;
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.arc(x, y, RING_RADIUS - 2, 0, Math.PI * 2);
+                    ctx.stroke();
+
+                    // Sparkle dot
+                    ctx.fillStyle = COLORS.accent;
+                    ctx.fillRect(x - 1, y - RING_RADIUS + 1, 2, 2);
+                }
+
+                function drawNokiaText(x, y) {
+                    // Nokia style text using pixel art
+                    ctx.fillStyle = COLORS.dark;
+                    ctx.font = 'bold 10px "Courier New", monospace';
+                    ctx.textAlign = "center";
+                }
+
+                function render() {
+                    // Clear
+                    ctx.fillStyle = COLORS.bg;
+                    ctx.fillRect(0, 0, W, H);
+
+                    // Screen shake
+                    let shakeX = 0;
+                    let shakeY = 0;
+                    if (shakeTimer > 0) {
+                        shakeX = (Math.random() - 0.5) * 6;
+                        shakeY = (Math.random() - 0.5) * 6;
+                        shakeTimer--;
+                    }
+
+                    ctx.save();
+                    ctx.translate(shakeX, shakeY);
+
+                    // --- Draw game elements relative to camera ---
+                    const offsetY = -Math.floor(cameraY);
+
+                    // Background grid lines (parallax)
+                    ctx.strokeStyle = COLORS.mid;
+                    ctx.lineWidth = 0.5;
+                    const gridSpacing = 20;
+                    const startGridY = -(offsetY % gridSpacing);
+                    for (
+                        let gy = startGridY;
+                        gy < H + gridSpacing;
+                        gy += gridSpacing
+                    ) {
+                        ctx.beginPath();
+                        ctx.moveTo(0, gy);
+                        ctx.lineTo(W, gy);
+                        ctx.stroke();
+                    }
+                    for (let gx = 0; gx < W; gx += gridSpacing) {
+                        ctx.beginPath();
+                        ctx.moveTo(gx, 0);
+                        ctx.lineTo(gx, H);
+                        ctx.stroke();
+                    }
+
+                    // Draw platforms
+                    for (const plat of platforms) {
+                        const screenY = plat.y + offsetY;
+                        if (screenY > -20 && screenY < H + 20) {
+                            drawPlatform(plat.x, screenY, plat.width);
+                        }
+                    }
+
+                    // Draw rings
+                    for (const ring of rings) {
+                        if (!ring.collected) {
+                            const screenY = ring.y + offsetY;
+                            if (screenY > -20 && screenY < H + 20) {
+                                drawRing(ring.x, screenY);
+                            }
+                        }
+                    }
+
+                    // Draw ball
+                    const ballScreenY = ball.y + offsetY;
+                    drawBall(ball.x, ballScreenY);
+
+                    ctx.restore();
+
+                    // --- HUD ---
+                    // Top bar
+                    ctx.fillStyle = COLORS.dark;
+                    ctx.globalAlpha = 0.3;
+                    ctx.fillRect(0, 0, W, 14);
+                    ctx.globalAlpha = 1;
+
+                    ctx.fillStyle = COLORS.dark;
+                    ctx.font = '8px "Courier New", monospace';
+                    ctx.textAlign = "left";
+                    ctx.fillText(`LVL ${level}`, 4, 10);
+                    ctx.textAlign = "right";
+                    ctx.fillText(`${score}`, W - 4, 10);
+
+                    // Lives (pixel hearts)
+                    ctx.textAlign = "center";
+                    for (let i = 0; i < lives; i++) {
+                        ctx.fillText("♥", W / 2 - 12 + i * 12, 10);
+                    }
+
+                    // --- State overlays ---
+                    if (gameState === "title") {
+                        drawOverlay(
+                            "NOKIA BOUNCE",
+                            "Press SPACE or ■ to start",
+                            true,
+                        );
+                    } else if (gameState === "paused") {
+                        drawOverlay("PAUSED", "Press P or ■ to resume", false);
+                    } else if (gameState === "gameover") {
+                        drawOverlay(
+                            "GAME OVER",
+                            `Score: ${score}  |  Press ■ to retry`,
+                            false,
+                            true,
+                        );
+                    } else if (gameState === "levelComplete") {
+                        drawOverlay(
+                            `LEVEL ${level} CLEAR!`,
+                            "Get ready...",
+                            true,
+                        );
+                    }
+                }
+
+                function drawOverlay(
+                    title,
+                    subtitle,
+                    showBall = false,
+                    isGameOver = false,
+                ) {
+                    ctx.fillStyle = "rgba(0,0,0,0.55)";
+                    ctx.fillRect(0, 0, W, H);
+
+                    // Title box
+                    const bx = 10;
+                    const by = 55;
+                    const bw = W - 20;
+                    const bh = 60;
+
+                    ctx.fillStyle = COLORS.bg;
+                    ctx.fillRect(bx, by, bw, bh);
+                    ctx.strokeStyle = COLORS.dark;
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(bx, by, bw, bh);
+                    // Inner border
+                    ctx.strokeStyle = COLORS.dark;
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(bx + 3, by + 3, bw - 6, bh - 6);
+
+                    ctx.fillStyle = COLORS.dark;
+                    ctx.font = 'bold 10px "Courier New", monospace';
+                    ctx.textAlign = "center";
+                    ctx.fillText(title, W / 2, by + 24);
+
+                    ctx.font = '7px "Courier New", monospace';
+                    ctx.fillStyle = COLORS.mid;
+                    ctx.fillText(subtitle, W / 2, by + 44);
+
+                    // Draw a bouncing ball in the title
+                    if (showBall) {
+                        const bounceY =
+                            by -
+                            BALL_RADIUS +
+                            Math.abs(Math.sin(Date.now() / 400) * 20);
+                        drawBall(W / 2, bounceY);
+                    }
+
+                    if (isGameOver) {
+                        ctx.fillStyle = COLORS.danger;
+                        ctx.font = '7px "Courier New", monospace';
+                        ctx.fillText(
+                            `Final Score: ${score}`,
+                            W / 2,
+                            by + bh + 16,
+                        );
+                    }
+                }
+
+                // --- Game loop ---
+                function gameLoop() {
+                    update();
+                    render();
+                    requestAnimationFrame(gameLoop);
+                }
+
+                // --- Start ---
+                initLevel();
+                gameState = "title";
+                gameLoop();
+
+                console.log("📱 Nokia 2310 Bounce ready!");
+                console.log(
+                    "Controls: Arrow Keys / A,D to move | Space/Enter to start | P to pause",
+                );
+                console.log("Touch: Use on-screen buttons for mobile play");
+            })();
+        </script>
+    </body>
+</html>
